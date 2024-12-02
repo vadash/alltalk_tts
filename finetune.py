@@ -1,5 +1,5 @@
 """
-XTTS finetune module for training and customizing text-to-speech models. 
+XTTS finetune module for training and customizing text-to-speech models.
 Provides functionality for dataset creation, model training, and inference.
 """
 # Standard Library Imports
@@ -125,7 +125,7 @@ class Logger:
     Singleton class to handle logging output to both the terminal and a log file.
     """
     _instance = None
-    
+
     def __new__(cls, *args, **kwargs):
         """
         Ensure a single instance of the Logger class is created.
@@ -136,20 +136,20 @@ class Logger:
             cls._instance.log_file = "finetune.log"
             cls._instance.terminal = sys.stdout
             cls._instance.current_model_path = None  # To store current training path
-            
+
             # Open in append mode
             cls._instance.log = open(cls._instance.log_file, "a", encoding="utf-8")
         return cls._instance
 
     def __init__(self, *args, **kwargs):
-        """Initialize logger instance."""        
+        """Initialize logger instance."""
         pass
 
     def set_model_path(self, path):
         """
         Set the current model training path for logging context.
         :param path: Path to the current model directory.
-        """        
+        """
         self.current_model_path = path
 
     def write(self, message):
@@ -157,8 +157,8 @@ class Logger:
         Write a message to both the terminal and the log file.
         Filters out non-printable characters.
         :param message: The message to be logged.
-        """        
-        filtered_message = ''.join(char for char in message 
+        """
+        filtered_message = ''.join(char for char in message
                                  if char.isprintable() or char in '\n\r\t')
         self.terminal.write(filtered_message)
         try:
@@ -170,7 +170,7 @@ class Logger:
     def flush(self):
         """
         Flush any buffered log content to the log file and terminal.
-        """        
+        """
         self.terminal.flush()
         try:
             self.log.flush()
@@ -181,9 +181,9 @@ class Logger:
         """
         Mimic the isatty method to comply with terminal-like behavior.
         :return: Always returns False.
-        """        
+        """
         return False
-    
+
     def clear_log(self):
         """
         Delete the existing log file and recreate it to clear its contents.
@@ -204,7 +204,7 @@ def setup_logging():
     global _logging_setup_done
     if _logging_setup_done:
         return
-        
+
     # redirect stdout and stderr to a file
     sys.stdout = Logger()
     sys.stderr = sys.stdout
@@ -216,7 +216,7 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
-    
+
     _logging_setup_done = True
 
 # Call setup at module level
@@ -232,7 +232,7 @@ def read_logs():
     with open(sys.stdout.log_file, "r", encoding="utf-8") as f:
         content = f.read()
         # Additional filtering when reading the file
-        return ''.join(char for char in content 
+        return ''.join(char for char in content
                       if char.isprintable() or char in '\n\r\t')
 
 ##############################
@@ -288,7 +288,7 @@ def debug_print(
     elif level == "DUPLICATES" and DebugLevels.DUPLICATES:
         print(f"{prefix} [DUP] {message}")
     elif level == "VALIDATION" and DebugLevels.VALIDATION:
-        print(f"{prefix} [VAL] {message}")        
+        print(f"{prefix} [VAL] {message}")
 
 
 class AudioStats:
@@ -975,7 +975,7 @@ def format_audio_list(
     Returns:
         tuple: (train_metadata_path, eval_metadata_path, audio_total_size)
     """
-    global validate_train_metadata_path, validate_eval_metadata_path, validate_audio_folder 
+    global validate_train_metadata_path, validate_eval_metadata_path, validate_audio_folder
     global validate_whisper_model, validate_target_language, out_path, torch, whisper # pylint: disable=no-member
 
     # Clear down the finetune.log file
@@ -1060,7 +1060,7 @@ def format_audio_list(
     if os.path.exists(eval_metadata_path):
         existing_metadata['eval'] = pd.read_csv(eval_metadata_path, sep="|")
         debug_print("Loaded existing evaluation metadata", "DATA_PROCESS")
-    
+
     if os.path.exists(train_metadata_path) and os.path.exists(eval_metadata_path):
         # If dataset exists, read but don't modify the language
         if os.path.exists(lang_file_path):
@@ -1080,7 +1080,7 @@ def format_audio_list(
             debug_print(f"Updated language to: {fal_target_language}", "GENERAL")
         else:
             debug_print("Using existing language setting", "GENERAL")
-        
+
     # Get audio files list
     original_audio_files = [os.path.join(original_samples_folder, file)
                             for file in os.listdir(original_samples_folder)
@@ -1164,11 +1164,15 @@ def format_audio_list(
             debug_print("Processing with VAD", "AUDIO")
             # Get VAD segments with resampling
             vad_segments = process_audio_with_vad(
-                wav, sr, vad_model, get_speech_timestamps)
+                wav, sr, vad_model, get_speech_timestamps, max_duration=float(fal_max_sample_length))
 
             # Group short segments that are close together
             merged_segments = merge_short_segments(
-                vad_segments, min_duration, max_gap=0.3)
+                vad_segments, 
+                min_duration=float(fal_min_sample_length),
+                sr=sr,
+                max_gap=0.3
+            )
             debug_print(
                 f"Merged {len(vad_segments)-len(merged_segments)} short segments",
                 "SEGMENTS")
@@ -1178,14 +1182,14 @@ def format_audio_list(
             for segment in merged_segments:
                 chunk = wav[segment['start']:segment['end']]
                 duration = chunk.size(-1) / sr
-                if duration < min_duration:
+                if duration < float(fal_min_sample_length):
                     debug_print(
                         f"Segment too short ({duration:.2f}s), attempting to extend",
                         "SEGMENTS",
                         is_warning=True)
                     # Try to extend segment if possible
                     chunk = extend_segment(
-                        wav, segment['start'], segment['end'], sr, min_duration)
+                        wav, segment['start'], segment['end'], sr, float(fal_min_sample_length))
                     duration = chunk.size(-1) / sr
 
                 if chunk.numel() > 0:
@@ -1194,13 +1198,13 @@ def format_audio_list(
 
             # Process each speech chunk
             for chunk_idx, (chunk, duration) in enumerate(speech_chunks):
-                if duration < min_duration:
+                if duration < float(fal_min_sample_length):
                     stats.segments_under_min += 1
                     debug_print(
                         f"Short segment: {duration:.2f}s",
                         "SEGMENTS",
                         is_warning=True)
-                elif duration > max_duration:
+                elif duration > float(fal_max_sample_length):
                     stats.segments_over_max += 1
                     debug_print(
                         f"Long segment: {duration:.2f}s",
@@ -1332,7 +1336,7 @@ def format_audio_list(
             fal_whisper_model, fal_target_language
         )
         _cleanup_resources(asr_model, existing_metadata)
-        return train_metadata_path, eval_metadata_path, audio_total_size
+        return train_metadata_path, eval_metadata_path, audio_total_size, fal_speaker_name_input, fal_speaker_name_input, fal_speaker_name_input
 
     # Check for new metadata
     if not metadata["audio_file"]:
@@ -1345,7 +1349,7 @@ def format_audio_list(
             fal_whisper_model, fal_target_language
         )
         _cleanup_resources(asr_model, existing_metadata)
-        return train_metadata_path, eval_metadata_path, audio_total_size
+        return train_metadata_path, eval_metadata_path, audio_total_size, fal_speaker_name_input, fal_speaker_name_input, fal_speaker_name_input
 
     # Process metadata and handle duplicates
     debug_print("Processing metadata and handling duplicates", "DATA_PROCESS")
@@ -1399,7 +1403,7 @@ def format_audio_list(
             "Failed to create valid dataset splits",
             "DATA_PROCESS",
             is_error=True)
-        return None, None, 0
+        return None, None, 0, fal_speaker_name_input, fal_speaker_name_input, fal_speaker_name_input
 
     final_training_set, final_eval_set = train_eval_split
 
@@ -1447,7 +1451,7 @@ def format_audio_list(
         for file_name, length in too_long_files:
             debug_print(f"  {file_name}: {length:.2f} seconds", "SEGMENTS")
 
-    return train_metadata_path, eval_metadata_path, audio_total_size
+    return train_metadata_path, eval_metadata_path, audio_total_size, fal_speaker_name_input, fal_speaker_name_input, fal_speaker_name_input
 
 
 def _create_bpe_tokenizer(bpe_whisper_words, bpe_out_path, bpe_base_path):
@@ -1514,100 +1518,152 @@ def _create_bpe_tokenizer(bpe_whisper_words, bpe_out_path, bpe_base_path):
             is_error=True)
         raise
 
-
-def merge_short_segments(segments, min_duration, max_gap=0.5):
+def merge_short_segments(segments, min_duration, sr, max_gap=0.5, pad_duration=0.1):
     """
-    More aggressive merge strategy for short segments
-    - Increases max_gap to 0.5s (from 0.3s)
-    - Looks ahead multiple segments for potential merges
-    - Considers surrounding context
+    Merge speech segments with improved duration handling, gap analysis, and padding.
+    
+    Args:
+        segments: List of speech segments
+        min_duration: Minimum segment duration in seconds
+        sr: Sample rate
+        max_gap: Maximum gap between segments to merge (seconds)
+        pad_duration: Amount of padding to add between merged segments (seconds)
+        
+    Returns:
+        list: Merged speech segments with padding
     """
     if not segments:
         return segments
 
+    # Convert durations to samples
+    min_samples = int(min_duration * sr)
+    max_gap_samples = int(max_gap * sr)
+    pad_samples = int(pad_duration * sr)
+    
     merged = []
     current_group = []
-    target_duration = (min_duration + 10.0) / 2  # Target middle of range
-
+    
     for i, segment in enumerate(segments):
-        current_duration = sum(s["end"] - s["start"] 
-                             for s in current_group) if current_group else 0
-
-        # If this is a continuation of current group
-        if current_group and (segment["start"] - current_group[-1]["end"]) <= max_gap:
-            # Check if adding this segment gets us closer to target duration
-            new_duration = current_duration + (segment["end"] - segment["start"])
-            if abs(new_duration - target_duration) < abs(current_duration - target_duration):
-                current_group.append(segment)
-            else:
-                # Save current group and start new one
-                merged_segment = {
-                    "start": current_group[0]["start"],
-                    "end": current_group[-1]["end"]
-                }
-                merged.append(merged_segment)
-                current_group = [segment]
+        if not current_group:
+            current_group.append(segment)
+            continue
+            
+        # Calculate gap to previous segment
+        gap = segment["start"] - current_group[-1]["end"]
+        current_duration = sum(s["end"] - s["start"] for s in current_group)
+        
+        # Decide whether to merge based on gap and duration
+        if gap <= max_gap_samples and current_duration < min_samples:
+            # Add padding between segments if gap is large enough
+            if gap > pad_samples * 2:
+                # Adjust end of previous segment and start of current segment
+                current_group[-1]["end"] -= pad_samples
+                segment["start"] += pad_samples
+            current_group.append(segment)
         else:
-            # Save previous group if it exists
-            if current_group:
+            # Process current group if it meets minimum duration
+            if current_duration >= min_samples:
                 merged_segment = {
                     "start": current_group[0]["start"],
                     "end": current_group[-1]["end"]
                 }
+                
+                # Add padding at the start if possible
+                if merged_segment["start"] >= pad_samples:
+                    merged_segment["start"] -= pad_samples
+                
+                # Add padding at the end if not the last segment
+                if i < len(segments) - 1:
+                    next_start = segments[i]["start"]
+                    if merged_segment["end"] + pad_samples < next_start:
+                        merged_segment["end"] += pad_samples
+                
                 merged.append(merged_segment)
             current_group = [segment]
 
-    # Handle last group
+    # Handle final group
     if current_group:
-        merged_segment = {
-            "start": current_group[0]["start"],
-            "end": current_group[-1]["end"]
-        }
-        merged.append(merged_segment)
+        current_duration = sum(s["end"] - s["start"] for s in current_group)
+        if current_duration >= min_samples:
+            merged_segment = {
+                "start": current_group[0]["start"],
+                "end": current_group[-1]["end"]
+            }
+            
+            # Add padding at the start if possible
+            if merged_segment["start"] >= pad_samples:
+                merged_segment["start"] -= pad_samples
+            
+            # Add padding at the end of the final segment
+            merged_segment["end"] += pad_samples
+            
+            merged.append(merged_segment)
 
     debug_print(
-        f"Merged {len(segments) - len(merged)} segments into {len(merged)} segments with mid-range preference",
+        f"Merged {len(segments) - len(merged)} segments, new total: {len(merged)}",
         "SEGMENTS"
     )
+    
+    # Log padding information
+    debug_print(
+        f"Added {pad_duration}s padding between merged segments and at boundaries",
+        "SEGMENTS"
+    )
+    
     return merged
 
-
-def extend_segment(wav, start, end, sr, min_duration, context_window=1.0):
+def extend_segment(wav, start, end, sr, min_duration):
     """
-    Improved segment extension with better context handling
-    - Adds context_window parameter for smoother extensions
-    - More balanced extension on both sides
-    - Checks audio content when extending
+    Extend audio segments with improved boundary handling and zero padding.
+    
+    Args:
+        wav: Audio waveform tensor
+        start: Start sample index
+        end: End sample index
+        sr: Sample rate
+        min_duration: Minimum duration in seconds
+        
+    Returns:
+        tensor: Extended audio segment
     """
     current_duration = (end - start) / sr
     if current_duration >= min_duration:
         return wav[start:end]
 
     samples_needed = int((min_duration - current_duration) * sr)
-
-    # Try to extend equally on both sides
+    
+    # Calculate symmetric extension
     extend_left = samples_needed // 2
     extend_right = samples_needed - extend_left
-
-    # Add some context window
-    context_samples = int(context_window * sr)
-    new_start = max(0, start - extend_left - context_samples)
-    new_end = min(wav.size(-1), end + extend_right + context_samples)
-
-    # Check if we got enough duration
-    if (new_end - new_start) / sr < min_duration:
-        # If still too short, try to compensate from the other side
-        if new_start == 0:
-            new_end = min(wav.size(-1), end + samples_needed + context_samples)
-        elif new_end == wav.size(-1):
-            new_start = max(0, start - samples_needed - context_samples)
+    
+    # Calculate new boundaries
+    new_start = max(0, start - extend_left)
+    new_end = min(wav.size(-1), end + extend_right)
+    
+    # If we couldn't extend enough on one side, try the other
+    if new_start == 0:
+        new_end = min(wav.size(-1), end + samples_needed)
+    elif new_end == wav.size(-1):
+        new_start = max(0, start - samples_needed)
+        
+    # If we still don't have enough samples, pad with zeros
+    final_segment = wav[new_start:new_end]
+    if final_segment.size(-1) < min_duration * sr:
+        padding_needed = int(min_duration * sr) - final_segment.size(-1)
+        padding_left = padding_needed // 2
+        padding_right = padding_needed - padding_left
+        
+        final_segment = torch.cat([
+            torch.zeros(padding_left, dtype=wav.dtype, device=wav.device),
+            final_segment,
+            torch.zeros(padding_right, dtype=wav.dtype, device=wav.device)
+        ])
 
     debug_print(
-        f"Extended segment from {current_duration:.2f}s to {(new_end - new_start) / sr:.2f}s",
-        "SEGMENTS",
+        f"Extended segment from {current_duration:.2f}s to {final_segment.size(-1)/sr:.2f}s",
+        "SEGMENTS"
     )
-    return wav[new_start:new_end]
-
+    return final_segment
 
 # Helper functions for better organization
 
@@ -1783,105 +1839,128 @@ def process_transcription_result(
     ptr_sentence_start = None
     ptr_first_word = True
     ptr_current_words = []
-
+    
+    # Get all words with timestamps across all segments
+    all_words = []
     for ptr_segment in ptr_result["segments"]:
-        if "words" not in ptr_segment:
+        if "words" in ptr_segment:
+            all_words.extend(ptr_segment["words"])
+
+    for word_idx, ptr_word_info in enumerate(all_words):
+        ptr_word = ptr_word_info.get("word", "").strip()
+        if not ptr_word:
             continue
 
-        for ptr_word_info in ptr_segment["words"]:
-            ptr_word = ptr_word_info.get("word", "").strip()
-            if not ptr_word:
-                continue
+        ptr_start_time = ptr_word_info.get("start", 0)
+        ptr_end_time = ptr_word_info.get("end", 0)
 
-            ptr_start_time = ptr_word_info.get("start", 0)
-            ptr_end_time = ptr_word_info.get("end", 0)
+        # Look ahead to get next word's start time if available
+        next_start_time = None
+        if word_idx < len(all_words) - 1:
+            next_word = all_words[word_idx + 1]
+            next_start_time = next_word.get("start", None)
 
-            if ptr_create_bpe_tokenizer:
-                ptr_whisper_words.append(ptr_word)
+        # If there's a next word, extend current word's end time
+        if next_start_time is not None:
+            # Extend to halfway between current end and next start
+            ptr_end_time = (ptr_end_time + next_start_time) / 2
 
-            if ptr_first_word:
-                ptr_sentence_start = ptr_start_time
-                if len(ptr_current_words) == 0:
-                    ptr_sentence_start = max(
-                        ptr_sentence_start - ptr_buffer, 0)
-                else:
-                    ptr_previous_end = ptr_current_words[-1].get(
-                        "end", 0) if ptr_current_words else 0
-                    ptr_sentence_start = max(
-                        ptr_sentence_start - ptr_buffer,
-                        (ptr_previous_end + ptr_start_time) / 2)
-                ptr_sentence = ptr_word
-                ptr_first_word = False
+        if ptr_create_bpe_tokenizer:
+            ptr_whisper_words.append(ptr_word)
+
+        if ptr_first_word:
+            ptr_sentence_start = ptr_start_time
+            if len(ptr_current_words) == 0:
+                ptr_sentence_start = max(ptr_sentence_start - ptr_buffer, 0)
             else:
-                ptr_sentence += " " + ptr_word
+                ptr_previous_end = ptr_current_words[-1].get("end", 0) if ptr_current_words else 0
+                ptr_sentence_start = max(
+                    ptr_sentence_start - ptr_buffer,
+                    (ptr_previous_end + ptr_start_time) / 2)
+            ptr_sentence = ptr_word
+            ptr_first_word = False
+        else:
+            ptr_sentence += " " + ptr_word
 
-            ptr_current_words.append(
-                {"word": ptr_word, "start": ptr_start_time, "end": ptr_end_time})
+        ptr_current_words.append({
+            "word": ptr_word, 
+            "start": ptr_start_time, 
+            "end": ptr_end_time
+        })
 
-            # Handle sentence splitting and audio saving
-            if ptr_word[-1] in ["!", ".",
-                                "?"] or (ptr_end_time - ptr_sentence_start) > ptr_max_duration:
-                save_audio_segment(
-                    ptr_audio,
-                    ptr_sr,
-                    ptr_sentence_start,
-                    ptr_end_time,
-                    ptr_sentence,
-                    ptr_audio_file_name_without_ext,
-                    ptr_i,
-                    ptr_speaker_name,
-                    ptr_audio_folder,
-                    ptr_metadata,
-                    ptr_max_duration,
-                    ptr_buffer,
-                    ptr_too_long_files,
-                    ptr_target_language,
-                )
-                ptr_i += 1
-                ptr_first_word = True
-                ptr_current_words = []
-                ptr_sentence = ""
+        # Handle sentence splitting and audio saving
+        if ptr_word[-1] in ["!", ".", "?"] or (ptr_end_time - ptr_sentence_start) > ptr_max_duration:
+            # For the last word in a sentence, try to extend the end time to the next sentence start
+            if word_idx < len(all_words) - 1:
+                next_sentence_start = all_words[word_idx + 1].get("start", None)
+                if next_sentence_start is not None:
+                    # Extend to just before the next sentence
+                    ptr_end_time = next_sentence_start - 0.05  # Leave small gap
+
+            save_audio_segment(
+                ptr_audio,
+                ptr_sr,
+                ptr_sentence_start,
+                ptr_end_time,
+                ptr_sentence,
+                ptr_audio_file_name_without_ext,
+                ptr_i,
+                ptr_speaker_name,
+                ptr_audio_folder,
+                ptr_metadata,
+                ptr_max_duration,
+                ptr_buffer,
+                ptr_too_long_files,
+                ptr_target_language,
+            )
+            ptr_i += 1
+            ptr_first_word = True
+            ptr_current_words = []
+            ptr_sentence = ""
 
 
-def process_audio_with_vad(wav, sr, vad_model, get_speech_timestamps):
+def process_audio_with_vad(wav, sr, vad_model, get_speech_timestamps, max_duration=float("inf")):
     """
-    Enhanced VAD processing with better end-of-speech detection
+    Enhanced VAD processing with better end-of-speech detection and configurable parameters.
+    
+    Args:
+        wav: Audio waveform tensor
+        sr: Sample rate
+        vad_model: Silero VAD model
+        get_speech_timestamps: VAD timestamp function
+        max_duration: Maximum allowed duration for speech segments
+        
+    Returns:
+        list: Processed and merged speech segments
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     wav = wav.to(device)
 
+    # Resample to 16kHz for VAD
     resampler = T.Resample(sr, 16000).to(device)
     wav_16k = resampler(wav)
 
-    # Adjusted VAD parameters
+    # Configure VAD parameters
     vad_segments = get_speech_timestamps(
         wav_16k,
         vad_model,
         sampling_rate=16000,
-        threshold=0.2,  # Lower threshold to be more sensitive to speech
-        min_speech_duration_ms=200,  # Shorter to catch brief utterances
-        max_speech_duration_s=float("inf"),
-        min_silence_duration_ms=300,  # Shorter silence duration
-        window_size_samples=1024,  # Smaller window for more precise detection
-        speech_pad_ms=300,  # Add padding to end of speech segments
+        threshold=0.2,  # Lower threshold for better speech sensitivity
+        neg_threshold=0.001,  # Explicit negative threshold for Silero VAD
+        min_speech_duration_ms=200,  # Catch brief utterances
+        max_speech_duration_s=max_duration,
+        min_silence_duration_ms=300,  # Shorter silence for better segmentation
+        speech_pad_ms=100,  # Reduced padding to prevent overlap
     )
 
     # Scale timestamps back to original sample rate
     scale_factor = sr / 16000
     for segment in vad_segments:
         segment["start"] = int(segment["start"] * scale_factor)
-        # Add extra padding at the end
-        segment["end"] = int(segment["end"] * scale_factor) + \
-            int(0.2 * sr)  # Add 200ms padding
+        segment["end"] = int(segment["end"] * scale_factor)
 
-    merged_segments = merge_short_segments(
-        vad_segments, min_duration=6.0, max_gap=0.5)
-
-    debug_print(
-        f"VAD processing: {len(vad_segments)} original segments, {len(merged_segments)} after merging",
-        "SEGMENTS",
-    )
-    return merged_segments
+    debug_print(f"Found {len(vad_segments)} initial speech segments", "SEGMENTS")
+    return vad_segments
 
 
 def handle_duplicates(
@@ -1937,20 +2016,20 @@ def normalize_text(text):
     text = text.lower()
     # Remove punctuation
     text = text.translate(str.maketrans("", "", string.punctuation))
-    # Replace multiple spaces with a single space  
+    # Replace multiple spaces with a single space
     text = re.sub(r"\s+", " ", text)
     # Convert written numbers to digits
     words = text.split()
     normalized_words = []
     for word in words:
         try:
-            # Try to convert word to a number  
+            # Try to convert word to a number
             normalized_word = str(w2n.word_to_num(word))
         except ValueError:
             # If it fails, keep the original word
             normalized_word = word
         normalized_words.append(normalized_word)
-    
+
     return " ".join(normalized_words)
 
 
@@ -1958,7 +2037,7 @@ def get_audio_file_list(mismatches):
     """Gets list of audio file paths from mismatched transcriptions DataFrame."""
     if mismatches.empty:
         return ["No bad transcriptions"]
-    
+
     return mismatches["Audio Path"].tolist()
 
 
@@ -2012,7 +2091,7 @@ def load_and_display_mismatches():
             audio_file = row["audio_file"]
             expected_text = row["text"]
             debug_print(f"Processing file {index + 1}/{total_files}: {audio_file}", "VALIDATION", is_info=True)
-            debug_print(f"Expected text length: {len(expected_text)}", "VALIDATION", is_info=True)                
+            debug_print(f"Expected text length: {len(expected_text)}", "VALIDATION", is_info=True)
             audio_file_name = audio_file.replace("wavs/", "")
             audio_path = os.path.normpath(
                 os.path.join(
@@ -2021,7 +2100,7 @@ def load_and_display_mismatches():
 
             if not os.path.exists(audio_path):
                 missing_files.append(audio_file_name)
-                debug_print(f"File not found: {audio_path}", "GENERAL", is_warning=True)                
+                debug_print(f"File not found: {audio_path}", "GENERAL", is_warning=True)
                 if vat_progress is not None:
                     vat_progress((index + 1, total_files),
                                  desc="Processing files")
@@ -2056,7 +2135,7 @@ def load_and_display_mismatches():
                 }
                 debug_print(f"Mismatch entry keys: {mismatch_entry.keys()}", "VALIDATION", is_info=True)
                 mismatches.append(mismatch_entry)
-                
+
             if vat_progress is not None:
                 vat_progress((index + 1, total_files), desc="Processing files")
 
@@ -2098,7 +2177,7 @@ def load_and_display_mismatches():
 
         if not mismatches:
             debug_print("No transcription mismatches found!", "GENERAL", is_info=True)
-            empty_df = pd.DataFrame(columns=["expected_text", "transcribed_text", "filename", 
+            empty_df = pd.DataFrame(columns=["expected_text", "transcribed_text", "filename",
                                            "full_path", "row_index", "source_csv"])
             display_df = pd.DataFrame(columns=["expected_text", "transcribed_text", "filename"])
             display_df.loc[0] = ["No bad transcriptions", "No bad transcriptions", "N/A"]
@@ -2298,11 +2377,11 @@ def check_model_requirements(model_folder):
         "mel_stats.pth": False,
         "speakers_xtts.pth": False
     }
-    
+
     if model_folder.exists():
         for file in required_files:
             required_files[file] = (model_folder / file).exists()
-    
+
     return required_files
 
 def train_gpt(
@@ -2322,13 +2401,13 @@ def train_gpt(
         warm_up,
         max_audio_length=255995,
         progress=gr.Progress()):
-    
+
     # First check if a model was selected
     if "No Models Available" in model_to_train:
         debug_print("No XTTS model selected for training.", "MODEL_OPS", is_error=True)
         debug_print("Please download a model using AllTalk's main interface > TTS Engine Settings > XTTS > Model/Voices Download", "MODEL_OPS", is_info=True)
         return
-    
+
     # Check if selected model exists and has required files
     model_path = this_dir / "models" / "xtts" / model_to_train
     if not model_path.exists():
@@ -2339,14 +2418,14 @@ def train_gpt(
     # Check for required files
     files = check_model_requirements(model_path)
     missing_files = [file for file, exists in files.items() if not exists]
-    
+
     if missing_files:
         debug_print(f"Missing required files in {model_to_train}:", "MODEL_OPS", is_error=True)
         for file in missing_files:
             debug_print(f"❌ {file}", "MODEL_OPS", is_error=True)
         debug_print("\nPlease redownload the model using AllTalk's interface", "MODEL_OPS", is_info=True)
         return
-    
+
     # Confirm all model files found and continue with training
     debug_print(f"✓ All required files found for model: {model_to_train}", "MODEL_OPS", is_info=True)
 
@@ -2384,7 +2463,7 @@ def train_gpt(
         free_memory = total_memory - (torch.cuda.memory_allocated(gpu_id) / (1024**3))
         debug_print(f"- Total VRAM: {total_memory:.2f}GB", "GPU_MEMORY", is_info=True)
         debug_print(f"- Free VRAM: {free_memory:.2f}GB", "GPU_MEMORY", is_info=True)
-        
+
         # Memory warnings
         if free_memory < 3:
             debug_print("WARNING: Very low available VRAM!", "GPU_MEMORY", is_warning=True)
@@ -2402,7 +2481,7 @@ def train_gpt(
             debug_print(
                 "******************************",
                 level="GPU_MEMORY",
-                is_warning=True)            
+                is_warning=True)
             debug_print(
                 "IMPORTANT MEMORY CONSIDERATION",
                 level="GPU_MEMORY",
@@ -2410,7 +2489,7 @@ def train_gpt(
             debug_print(
                 "******************************",
                 level="GPU_MEMORY",
-                is_warning=True)            
+                is_warning=True)
             debug_print(
                 "Your available VRAM is below the recommended 12GB threshold.",
                 level="GPU_MEMORY",
@@ -2476,7 +2555,7 @@ def train_gpt(
                 is_info=True)
             training_assets = {
                 'Tokenizer': str(out_path / "bpe_tokenizer-vocab.json")
-            }        
+            }
         # Check for potential issues
         if len(train_df) < 100:
             debug_print("Very small training dataset", "DATA_PROCESS", is_warning=True)
@@ -2495,7 +2574,7 @@ def train_gpt(
     # Check for lang.txt in the same directory as train_csv
     dataset_dir = os.path.dirname(train_csv)
     lang_file = os.path.join(dataset_dir, "lang.txt")
-    
+
     # Set here the path that the checkpoints will be saved. Default:
     # ./training/
     project_path = os.path.join(out_path, "training")
@@ -2509,7 +2588,7 @@ def train_gpt(
     debug_print(
         f"- Evaluation Data: {eval_csv}",
         level="GENERAL",
-        is_info=True)  
+        is_info=True)
     debug_print(f"- Language: {language}", level="GENERAL", is_info=True)
     if os.path.exists(lang_file):
         try:
@@ -2522,12 +2601,12 @@ def train_gpt(
             debug_print(f"- Error reading lang.txt: {str(e)}", "GENERAL", is_warning=True)
             debug_print(f"- Falling back to provided language: {language}", "GENERAL", is_warning=True)
     else:
-        debug_print("- No lang.txt found, using provided language setting", "GENERAL", is_warning=True)    
+        debug_print("- No lang.txt found, using provided language setting", "GENERAL", is_warning=True)
     debug_print(f"- Batch Size: {batch_size}", level="GENERAL", is_info=True)
     debug_print(
         f"- Grad Steps: {grad_acumm}",
         level="GENERAL",
-        is_info=True)        
+        is_info=True)
     debug_print(
         f"- Training Epochs: {num_epochs}",
         level="GENERAL",
@@ -2763,7 +2842,7 @@ def train_gpt(
         f"- {lr_scheduler_params}",
         level="GENERAL",
         is_info=True)
-    
+
     # training parameters config
     config = GPTTrainerConfig(
         epochs=num_epochs,
@@ -2840,7 +2919,7 @@ def train_gpt(
         # Limit training to GPU memory instead of shared memory
         debug_print("Limiting GPU memory to 95%", "GPU_MEMORY", is_info=True)
         torch.cuda.set_per_process_memory_fraction(0.95)
-    
+
     print("\n")
     debug_print("********************************", "MODEL_OPS", is_info=True)
     debug_print("Starting training the XTTS model", "MODEL_OPS", is_info=True)
@@ -2911,7 +2990,7 @@ def load_model(xtts_checkpoint, xtts_config, xtts_vocab):
     config.load_json(xtts_config)
     XTTS_MODEL = Xtts.init_from_config(config)
     debug_print("Starting Step 3 - Loading XTTS model!", level="GENERAL", is_info=True)
-    
+
     XTTS_MODEL.load_checkpoint(
         config,
         checkpoint_path=xtts_checkpoint,
@@ -2930,10 +3009,10 @@ def run_tts(lang, tts_text, speaker_audio_file):
     """Generate the TTS for testing"""
     if XTTS_MODEL is None or not speaker_audio_file:
         return "You need to run the previous step to load the model !!", None, None
-        
+
     speaker_audio_file = str(speaker_audio_file)
     wavs_files = [speaker_audio_file]
-    
+
     if os.path.isdir(speaker_audio_file):
         wavs_files = glob.glob(os.path.join(speaker_audio_file, "*.wav"))
         speaker_audio_file = wavs_files[0]
@@ -2967,7 +3046,7 @@ def run_tts(lang, tts_text, speaker_audio_file):
 def get_available_voices(min_duration_seconds=6, speaker_name=None):
     """Get available voice files based on minimum duration."""
     directory = this_dir / "finetune" / speaker_name if (speaker_name and speaker_name != "personsname") else out_path
-    
+
     valid_files = []
     wav_files = Path(f"{directory}/wavs").glob("*.wav")
 
@@ -2975,7 +3054,7 @@ def get_available_voices(min_duration_seconds=6, speaker_name=None):
         try:
             waveform, sample_rate = torchaudio.load(str(voice_file))
             duration = waveform.size(1) / sample_rate
-            
+
             if duration >= float(min_duration_seconds):
                 valid_files.append(str(voice_file))
         except Exception as e:
@@ -3041,7 +3120,7 @@ def compact_custom_model(
         debug_print(error_message, level="GENERAL", is_error=True)
         return error_message
 
-    target_dir = this_dir / "models" / "xtts" / folder_path    
+    target_dir = this_dir / "models" / "xtts" / folder_path
     if overwrite_existing == "Do not overwrite existing files" and target_dir.exists():
         error_message = "The target folder already exists. Please change folder name or allow overwrites."
         debug_print(error_message, level="GENERAL", is_error=True)
@@ -3248,7 +3327,7 @@ def delete_training_data():
             level="GENERAL",
             is_warning=True)
         return "Specified Project Name folder could not be found."
-        
+
     # Iterate over all files and subdirectories
     for item in folder_to_delete.iterdir():
         # Exclude trainer_0_log.txt from deletion
@@ -3604,7 +3683,7 @@ if __name__ == "__main__":
                     )
                     precision = gr.Dropdown(
                         label="Model Precision", value="mixed", choices=[
-                            ("Mixed", "mixed"), ("FP16", "float16"), ("FP32", "float32")], scale=1)                    
+                            ("Mixed", "mixed"), ("FP16", "float16"), ("FP32", "float32")], scale=1)
                     lang = gr.Dropdown(
                         label="Dataset Language",
                         value="en",
@@ -3637,7 +3716,7 @@ if __name__ == "__main__":
                         step=1,
                         scale=1,
                     )
-                with gr.Row():                    
+                with gr.Row():
                     create_bpe_tokenizer = gr.Dropdown(
                         label="BPE Tokenizer",
                         value="False",
@@ -3653,19 +3732,19 @@ if __name__ == "__main__":
                         scale=1,
                     )
                     min_sample_length = gr.Dropdown(
-                        label="Min Audio Length (seconds)", 
+                        label="Min Audio Length (seconds)",
                         value="2",
                         choices=["1", "2", "3", "4", "5"],
                         info="Split large audio into a minimum of",
                         scale=1,
-                    )                    
+                    )
                     max_sample_length = gr.Dropdown(
                         label="Max Audio Length (seconds)",
-                        value="10", 
+                        value="10",
                         choices=["8","9","10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"],
                         info="Split large audio into a maximum of",
                         scale=1,
-                    )                    
+                    )
 
                 with gr.Accordion("🔍 Dataset Creation Debug Settings", open=False):
 
@@ -3734,7 +3813,7 @@ if __name__ == "__main__":
                                 label="Dataset Validation",
                                 value=DebugLevels.VALIDATION,
                                 info="Dataset Validation, amount, sentences, files",
-                            )                            
+                            )
 
                         with gr.Column(scale=1):
                             debug_general = gr.Checkbox(
@@ -3863,7 +3942,7 @@ if __name__ == "__main__":
                     try:
                         # Format audio list and split into training and
                         # evaluation datasets
-                        pd_train_meta, pd_eval_meta, pd_audio_total_size = format_audio_list(
+                        pd_train_meta, pd_eval_meta, pd_audio_total_size, pd_speaker_name_input, pd_speaker_name_input, pd_speaker_name_input = format_audio_list(
                             fal_target_language=pd_language,
                             fal_whisper_model=pd_whisper_model,
                             fal_max_sample_length=pd_max_sample_length,
@@ -4271,7 +4350,7 @@ if __name__ == "__main__":
                                 value=DebugLevels.MODEL_OPS,
                                 info="Model loading, training operations, cleanup",
                             )
-                        with gr.Column(scale=1):                            
+                        with gr.Column(scale=1):
                             debug_general = gr.Checkbox(
                                 label="General",
                                 value=DebugLevels.GENERAL,
@@ -4281,7 +4360,7 @@ if __name__ == "__main__":
                                 label="Data Processing",
                                 value=DebugLevels.DATA_PROCESS,
                                 info="Data processing, files, folders",
-                            )                         
+                            )
 
                     with gr.Row():
                         debug_select_all = gr.Button("Select All")
@@ -4330,7 +4409,7 @@ if __name__ == "__main__":
                         inputs=[],
                         outputs=[debug_gpu, debug_model, debug_general, debug_data],
                     )
-                
+
                 progress_train = gr.Label(label="Progress:")
 
                 with gr.Row():
